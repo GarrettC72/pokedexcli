@@ -4,28 +4,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"os"
 	"pokedexcli/internal/pokeapi"
-	"pokedexcli/internal/pokecache"
 )
 
 type cliCommand struct {
 	name        string
 	description string
-	callback    func(config *Config) error
+	callback    func(config *Config, argument string) error
 }
 
-type Config struct {
-	Next     *string
-	Previous *string
-	Cache    pokecache.Cache
-}
-
-var cliCommandMap map[string]cliCommand
-
-func init() {
-	cliCommandMap = map[string]cliCommand{
+func getCommands() map[string]cliCommand {
+	return map[string]cliCommand{
 		"exit": {
 			name:        "exit",
 			description: "Exit the Pokedex",
@@ -46,24 +38,34 @@ func init() {
 			description: "Displays the previous 20 Pokemon location areas",
 			callback:    commandMapb,
 		},
+		"explore": {
+			name:        "explore",
+			description: "Displays the Pokemon found in the given location area",
+			callback:    commandExplore,
+		},
+		"catch": {
+			name:        "catch",
+			description: "Attempt to catch a given Pokemon",
+			callback:    commandCatch,
+		},
 	}
 }
 
-func commandExit(config *Config) error {
+func commandExit(config *Config, argument string) error {
 	fmt.Println("Closing the Pokedex... Goodbye!")
 	os.Exit(0)
-	return fmt.Errorf("Error from exiting Pokedex CLI")
+	return nil
 }
 
-func commandHelp(config *Config) error {
-	fmt.Printf("Welcome to the Pokedex!\nUsage:\n")
-	for _, v := range cliCommandMap {
-		fmt.Printf("\n%s: %s", v.name, v.description)
+func commandHelp(config *Config, argument string) error {
+	fmt.Printf("Welcome to the Pokedex!\nUsage:\n\n")
+	for _, v := range getCommands() {
+		fmt.Printf("%s: %s\n", v.name, v.description)
 	}
-	return fmt.Errorf("\n")
+	return nil
 }
 
-func commandMap(config *Config) error {
+func commandMap(config *Config, argument string) error {
 	var url string
 	if config.Next != nil {
 		url = *config.Next
@@ -72,62 +74,130 @@ func commandMap(config *Config) error {
 	} else {
 		return fmt.Errorf("you're on the last page")
 	}
-	if entry, ok := config.Cache.Get(url); ok {
-		return readLocationAreas(entry, config)
+	if err := getLocationAreas(url, config); err != nil {
+		return err
 	}
-	return getLocationAreas(url, config)
+	return nil
 }
 
-func commandMapb(config *Config) error {
+func commandMapb(config *Config, argument string) error {
 	var url string
 	if config.Previous != nil {
 		url = *config.Previous
 	} else if config.Next == nil {
 		url = "https://pokeapi.co/api/v2/location-area/?offset=0&limit=20"
 	} else {
-		return fmt.Errorf("you're on the first page\n")
+		return fmt.Errorf("you're on the first page")
 	}
-	if entry, ok := config.Cache.Get(url); ok {
-		return readLocationAreas(entry, config)
+	if err := getLocationAreas(url, config); err != nil {
+		return err
 	}
-	return getLocationAreas(url, config)
+	return nil
 }
 
 func getLocationAreas(url string, config *Config) error {
-	res, err := http.Get(url)
-	if err != nil {
-		return fmt.Errorf("Error making Get request: %w", err)
-	}
-	body, err := io.ReadAll(res.Body)
-	defer res.Body.Close()
-	if res.StatusCode > 299 {
-		return fmt.Errorf("Response failed with status code: %d and\nbody: %s\n", res.StatusCode, body)
-	}
-	if err != nil {
-		return fmt.Errorf("Error reading response body: %w", err)
-	}
-	var response pokeapi.PokeAPIResponse
-	if err := json.Unmarshal(body, &response); err != nil {
-		return fmt.Errorf("error unmarshalling response: %w", err)
+	var response pokeapi.LocationPageResponse
+	if entry, ok := config.Cache.Get(url); ok {
+		if err := json.Unmarshal(entry, &response); err != nil {
+			return fmt.Errorf("Error unmarshalling response: %w", err)
+		}
+	} else {
+		res, err := http.Get(url)
+		if err != nil {
+			return fmt.Errorf("Error making Get request: %w", err)
+		}
+		body, err := io.ReadAll(res.Body)
+		defer res.Body.Close()
+		if res.StatusCode > 299 {
+			return fmt.Errorf("Response failed with status code: %d and\nbody: %s", res.StatusCode, body)
+		}
+		if err != nil {
+			return fmt.Errorf("Error reading response body: %w", err)
+		}
+		if err := json.Unmarshal(body, &response); err != nil {
+			return fmt.Errorf("Error unmarshalling response: %w", err)
+		}
+		config.Cache.Add(url, body)
 	}
 	for _, result := range response.Results {
 		fmt.Println(result.Name)
 	}
 	config.Next = response.Next
 	config.Previous = response.Previous
-	config.Cache.Add(url, body)
-	return fmt.Errorf("")
+	return nil
 }
 
-func readLocationAreas(body []byte, config *Config) error {
-	var response pokeapi.PokeAPIResponse
-	if err := json.Unmarshal(body, &response); err != nil {
-		return fmt.Errorf("error unmarshalling response: %w", err)
+func commandExplore(config *Config, name string) error {
+	if name == "" {
+		return fmt.Errorf("Missing location area argument\nUsage: explore <area_name>")
 	}
-	for _, result := range response.Results {
-		fmt.Println(result.Name)
+	var response pokeapi.LocationResponse
+	url := fmt.Sprintf("https://pokeapi.co/api/v2/location-area/%s/", name)
+	if entry, ok := config.Cache.Get(url); ok {
+		if err := json.Unmarshal(entry, &response); err != nil {
+			return fmt.Errorf("Error unmarshalling response: %w", err)
+		}
+	} else {
+		res, err := http.Get(url)
+		if err != nil {
+			return fmt.Errorf("Error making Get request: %w", err)
+		}
+		body, err := io.ReadAll(res.Body)
+		defer res.Body.Close()
+		if res.StatusCode > 299 {
+			return fmt.Errorf("Response failed with status code: %d and\nbody: %s", res.StatusCode, body)
+		}
+		if err != nil {
+			return fmt.Errorf("Error reading response body: %w", err)
+		}
+		if err := json.Unmarshal(body, &response); err != nil {
+			return fmt.Errorf("Error unmarshalling response: %w", err)
+		}
+		config.Cache.Add(url, body)
 	}
-	config.Next = response.Next
-	config.Previous = response.Previous
-	return fmt.Errorf("")
+	fmt.Printf("Exploring %s...\nFound Pokemon:\n", name)
+	for _, result := range response.PokemonEncounters {
+		fmt.Printf(" - %s\n", result.Pokemon.Name)
+	}
+	return nil
+}
+
+func commandCatch(config *Config, name string) error {
+	if name == "" {
+		return fmt.Errorf("Missing Pokemon name argument\nUsage: catch <pokemon_name>")
+	}
+	fmt.Printf("Throwing a Pokeball at %s...\n", name)
+	var response pokeapi.Pokemon
+	url := fmt.Sprintf("https://pokeapi.co/api/v2/pokemon/%s/", name)
+	if entry, ok := config.Cache.Get(url); ok {
+		if err := json.Unmarshal(entry, &response); err != nil {
+			return fmt.Errorf("Error unmarshalling response: %w", err)
+		}
+	} else {
+		res, err := http.Get(url)
+		if err != nil {
+			return fmt.Errorf("Error making Get request: %w", err)
+		}
+		body, err := io.ReadAll(res.Body)
+		defer res.Body.Close()
+		if res.StatusCode > 299 {
+			return fmt.Errorf("Response failed with status code: %d and\nbody: %s", res.StatusCode, body)
+		}
+		if err != nil {
+			return fmt.Errorf("Error reading response body: %w", err)
+		}
+		if err := json.Unmarshal(body, &response); err != nil {
+			return fmt.Errorf("Error unmarshalling response: %w", err)
+		}
+		config.Cache.Add(url, body)
+	}
+	target_rate := 30
+	catch_attempt := rand.Intn(response.BaseExperience)
+	if catch_attempt < target_rate {
+		fmt.Printf("%s was caught!\n", name)
+		config.Pokedex[name] = response
+	} else {
+		fmt.Printf("%s escaped!\n", name)
+	}
+	return nil
 }
