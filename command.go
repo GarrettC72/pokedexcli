@@ -48,6 +48,16 @@ func getCommands() map[string]cliCommand {
 			description: "Attempt to catch a given Pokemon",
 			callback:    commandCatch,
 		},
+		"inspect": {
+			name:        "inspect",
+			description: "Displays information about the given Pokemon in the Pokedex",
+			callback:    commandInspect,
+		},
+		"pokedex": {
+			name:        "pokedex",
+			description: "Displays all Pokemon caught and registered in the Pokedex",
+			callback:    commandPokedex,
+		},
 	}
 }
 
@@ -195,9 +205,40 @@ func commandCatch(config *Config, name string) error {
 	catch_attempt := rand.Intn(response.BaseExperience)
 	if catch_attempt < target_rate {
 		fmt.Printf("%s was caught!\n", name)
+		fmt.Println("You may now inspect it with the inspect command.")
 		config.Pokedex[name] = response
 	} else {
 		fmt.Printf("%s escaped!\n", name)
+	}
+	return nil
+}
+
+func commandInspect(config *Config, name string) error {
+	if name == "" {
+		return fmt.Errorf("Missing Pokemon name argument\nUsage: inspect <pokemon_name>")
+	}
+	if pokemon, exists := config.Pokedex[name]; !exists {
+		return fmt.Errorf("you have not caught that pokemon")
+	} else {
+		fmt.Printf("Name: %s\n", pokemon.Name)
+		fmt.Printf("Height: %v\n", pokemon.Height)
+		fmt.Printf("Weight: %v\n", pokemon.Weight)
+		fmt.Println("Stats:")
+		for _, pokemon_stat := range pokemon.Stats {
+			fmt.Printf("  -%s: %v\n", pokemon_stat.Stat.Name, pokemon_stat.BaseStat)
+		}
+		fmt.Println("Types:")
+		for _, pokemon_type := range pokemon.Types {
+			fmt.Printf("  - %s\n", pokemon_type.Type.Name)
+		}
+	}
+	return nil
+}
+
+func commandPokedex(config *Config, argument string) error {
+	fmt.Println("Your Pokedex:")
+	for _, pokemon := range config.Pokedex {
+		fmt.Printf(" - %s\n", pokemon.Name)
 	}
 	return nil
 }
